@@ -13,12 +13,13 @@ class Config:
     """
     def __init__(self):
         self.name = "Basic_unet"
-        self.root_dir = r"YOUR DIRECTORY HERE"
+        self.root_dir = r"/out"
         self.n_epochs = 10
         self.learning_rate = 0.0002
         self.batch_size = 8
         self.patch_size = 64
-        self.test_results_dir = "RESULTS GO HERE"
+        self.test_results_dir = "/test_result_out"
+        self.use_amp = True
 
 if __name__ == "__main__":
     # Get configuration
@@ -48,7 +49,17 @@ if __name__ == "__main__":
     # TASK: create three keys in the dictionary: "train", "val" and "test". In each key, store
     # the array with indices of training volumes to be used for training, validation 
     # and testing respectively.
-    # <YOUR CODE GOES HERE>
+    
+    train_end = int(0.7 * len(data))
+    val_end = int(0.85 * len(data))
+    
+    split["train"] = list(keys)[:train_end]
+    split["val"] = list(keys)[train_end:val_end]
+    split["test"] = list(keys)[val_end:]
+    
+    print(f"Training volumes: {len(split['train'])}")
+    print(f"Validation volumes: {len(split['val'])}")
+    print(f"Test volumes: {len(split['test'])}")
 
     # Set up and run experiment
     
