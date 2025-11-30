@@ -43,6 +43,7 @@ class UNetInferenceAgent:
     def single_volume_inference(self, volume):
         """
         Runs inference on a single volume of conformant patch size
+        Uses batched processing for improved GPU efficiency
 
         Arguments:
             volume {Numpy array} -- 3D array representing the volume
@@ -59,6 +60,31 @@ class UNetInferenceAgent:
         # that, put all slices into a 3D Numpy array. You can verify if your method is 
         # correct by running it on one of the volumes in your training set and comparing 
         # with the label in 3D Slicer.
-        # <YOUR CODE HERE>
-
-        return # 
+        
+        batch_size = 16
+        num_slices = volume.shape[0]
+        
+        with torch.no_grad():
+            for start_idx in range(0, num_slices, batch_size):
+                end_idx = min(start_idx + batch_size, num_slices)
+                
+                # Extract batch of 2D slices
+                batch_slices = volume[start_idx:end_idx, :, :]
+                
+                # Add channel dimension: [batch, 1, H, W]
+                batch_tensor = torch.from_numpy(batch_slices[:, None, :, :]).float().to(self.device)
+                prediction = self.model(batch_tensor)
+                
+                # Get the predicted class for each pixel (argmax over class dimension)
+                # prediction shape: [batch, num_classes, H, W]
+                prediction_mask = torch.argmax(prediction, dim=1)
+                
+                # Convert to numpy: [batch, H, W]
+                prediction_np = prediction_mask.cpu().numpy()
+                
+                for i in range(prediction_np.shape[0]):
+                    slices.append(prediction_np[i])
+        
+        prediction_volume = np.stack(slices, axis=0)
+        
+        return prediction_volume 
