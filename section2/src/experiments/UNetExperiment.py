@@ -47,10 +47,19 @@ class UNetExperiment:
         # TASK: SlicesDataset class is not complete. Go to the file and complete it. 
         # Note that we are using a 2D version of UNet here, which means that it will expect
         # batches of 2D slices.
+        
+        # Optimize num_workers for parallel data loading
+        # Use 4-8 workers for faster data prefetching (reduces GPU idle time)
+        # Set pin_memory=True for faster GPU transfer if CUDA is available
+        num_workers = 4
+        pin_memory = torch.cuda.is_available()
+        
         self.train_loader = DataLoader(SlicesDataset(dataset[split["train"]]),
-                batch_size=config.batch_size, shuffle=True, num_workers=0)
+                batch_size=config.batch_size, shuffle=True, num_workers=num_workers,
+                pin_memory=pin_memory, persistent_workers=True if num_workers > 0 else False)
         self.val_loader = DataLoader(SlicesDataset(dataset[split["val"]]),
-                batch_size=config.batch_size, shuffle=True, num_workers=0)
+                batch_size=config.batch_size, shuffle=True, num_workers=num_workers,
+                pin_memory=pin_memory, persistent_workers=True if num_workers > 0 else False)
 
         # we will access volumes directly for testing
         self.test_data = dataset[split["test"]]
@@ -76,6 +85,14 @@ class UNetExperiment:
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         # Scheduler helps us update learning rate automatically
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min')
+        self.use_amp = torch.cuda.is_available() and getattr(config, 'use_amp', True)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        if self.use_amp:
+            print("Using Automatic Mixed Precision (AMP) for faster training")
+        elif torch.cuda.is_available():
+            print("AMP disabled by configuration")
+        else:
+            print("CUDA not available, using standard precision")
 
         # Set up Tensorboard. By default it saves data into runs folder. You need to launch
         self.tensorboard_train_writer = SummaryWriter(comment="_train")
@@ -97,22 +114,30 @@ class UNetExperiment:
             # shape [BATCH_SIZE, 1, PATCH_SIZE, PATCH_SIZE] into variables data and target. 
             # Feed data to the model and feed target to the loss function
             # 
-            # data = <YOUR CODE HERE>
-            # target = <YOUR CODE HERE>
+            data = batch["image"].to(self.device)
+            target = batch["seg"].to(self.device)
 
-            prediction = self.model(data)
+            with torch.cuda.amp.autocast(enabled=self.use_amp):
+                prediction = self.model(data)
 
-            # We are also getting softmax'd version of prediction to output a probability map
-            # so that we can see how the model converges to the solution
-            prediction_softmax = F.softmax(prediction, dim=1)
+                # We are also getting softmax'd version of prediction to output a probability map
+                # so that we can see how the model converges to the solution
+                prediction_softmax = F.softmax(prediction, dim=1)
 
-            loss = self.loss_function(prediction, target[:, 0, :, :])
+                loss = self.loss_function(prediction, target[:, 0, :, :])
 
             # TASK: What does each dimension of variable prediction represent?
-            # ANSWER:
+            # ANSWER: prediction has shape [BATCH_SIZE, NUM_CLASSES, HEIGHT, WIDTH]
+            # - Dimension 0: Batch size (number of slices in the batch)
+            # - Dimension 1: Number of classes (3 classes: background, anterior, posterior)
+            # - Dimension 2: Height of the patch (patch_size)
+            # - Dimension 3: Width of the patch (patch_size)
+            # Each pixel gets a raw score for each of the 3 classes before softmax
 
-            loss.backward()
-            self.optimizer.step()
+            # Backward pass with gradient scaling for mixed precision
+            self.scaler.scale(loss).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
             if (i % 10) == 0:
                 # Output to console on every 10th batch
@@ -153,7 +178,14 @@ class UNetExperiment:
             for i, batch in enumerate(self.val_loader):
                 
                 # TASK: Write validation code that will compute loss on a validation sample
-                # <YOUR CODE HERE>
+                data = batch["image"].to(self.device)
+                target = batch["seg"].to(self.device)
+                
+                with torch.cuda.amp.autocast(enabled=self.use_amp):
+                    # Forward pass
+                    prediction = self.model(data)
+                    prediction_softmax = F.softmax(prediction, dim=1)
+                    loss = self.loss_function(prediction, target[:, 0, :, :])
 
                 print(f"Batch {i}. Data shape {data.shape} Loss {loss}")
 
