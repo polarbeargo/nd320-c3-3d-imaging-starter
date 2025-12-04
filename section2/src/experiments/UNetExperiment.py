@@ -53,13 +53,21 @@ class UNetExperiment:
         # Set pin_memory=True for faster GPU transfer if CUDA is available
         num_workers = 4
         pin_memory = torch.cuda.is_available()
+        pytorch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
+        supports_persistent_workers = pytorch_version >= (1, 7)
         
-        self.train_loader = DataLoader(SlicesDataset(dataset[split["train"]]),
-                batch_size=config.batch_size, shuffle=True, num_workers=num_workers,
-                pin_memory=pin_memory, persistent_workers=True if num_workers > 0 else False)
-        self.val_loader = DataLoader(SlicesDataset(dataset[split["val"]]),
-                batch_size=config.batch_size, shuffle=True, num_workers=num_workers,
-                pin_memory=pin_memory, persistent_workers=True if num_workers > 0 else False)
+        dataloader_kwargs = {
+            'batch_size': config.batch_size,
+            'shuffle': True,
+            'num_workers': num_workers,
+            'pin_memory': pin_memory
+        }
+        
+        if supports_persistent_workers and num_workers > 0:
+            dataloader_kwargs['persistent_workers'] = True
+        
+        self.train_loader = DataLoader(SlicesDataset(dataset[split["train"]]), **dataloader_kwargs)
+        self.val_loader = DataLoader(SlicesDataset(dataset[split["val"]]), **dataloader_kwargs)
 
         # we will access volumes directly for testing
         self.test_data = dataset[split["test"]]
@@ -85,14 +93,21 @@ class UNetExperiment:
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         # Scheduler helps us update learning rate automatically
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min')
-        self.use_amp = torch.cuda.is_available() and getattr(config, 'use_amp', True)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+        pytorch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
+        amp_available = pytorch_version >= (1, 6) and hasattr(torch.cuda, 'amp')
+        self.use_amp = amp_available and torch.cuda.is_available() and getattr(config, 'use_amp', True)
+        
         if self.use_amp:
+            self.scaler = torch.cuda.amp.GradScaler()
             print("Using Automatic Mixed Precision (AMP) for faster training")
-        elif torch.cuda.is_available():
-            print("AMP disabled by configuration")
         else:
-            print("CUDA not available, using standard precision")
+            self.scaler = None
+            if not amp_available:
+                print(f"AMP not available (PyTorch {torch.__version__}). Requires PyTorch >= 1.6.0")
+            elif not torch.cuda.is_available():
+                print("CUDA not available, using standard precision")
+            else:
+                print("AMP disabled by configuration")
 
         # Set up Tensorboard. By default it saves data into runs folder. You need to launch
         self.tensorboard_train_writer = SummaryWriter(comment="_train")
@@ -117,14 +132,16 @@ class UNetExperiment:
             data = batch["image"].to(self.device)
             target = batch["seg"].to(self.device)
 
-            with torch.cuda.amp.autocast(enabled=self.use_amp):
+            # Forward pass with optional mixed precision
+            if self.use_amp:
+                with torch.cuda.amp.autocast():
+                    prediction = self.model(data)
+                    prediction_softmax = F.softmax(prediction, dim=1)
+                    loss = self.loss_function(prediction, target[:, 0, :, :].long())
+            else:
                 prediction = self.model(data)
-
-                # We are also getting softmax'd version of prediction to output a probability map
-                # so that we can see how the model converges to the solution
                 prediction_softmax = F.softmax(prediction, dim=1)
-
-                loss = self.loss_function(prediction, target[:, 0, :, :])
+                loss = self.loss_function(prediction, target[:, 0, :, :].long())
 
             # TASK: What does each dimension of variable prediction represent?
             # ANSWER: prediction has shape [BATCH_SIZE, NUM_CLASSES, HEIGHT, WIDTH]
@@ -134,10 +151,14 @@ class UNetExperiment:
             # - Dimension 3: Width of the patch (patch_size)
             # Each pixel gets a raw score for each of the 3 classes before softmax
 
-            # Backward pass with gradient scaling for mixed precision
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            # Backward pass with optional gradient scaling for mixed precision
+            if self.use_amp:
+                self.scaler.scale(loss).backward()
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                self.optimizer.step()
 
             if (i % 10) == 0:
                 # Output to console on every 10th batch
@@ -181,11 +202,16 @@ class UNetExperiment:
                 data = batch["image"].to(self.device)
                 target = batch["seg"].to(self.device)
                 
-                with torch.cuda.amp.autocast(enabled=self.use_amp):
-                    # Forward pass
+                # Forward pass with optional mixed precision
+                if self.use_amp:
+                    with torch.cuda.amp.autocast():
+                        prediction = self.model(data)
+                        prediction_softmax = F.softmax(prediction, dim=1)
+                        loss = self.loss_function(prediction, target[:, 0, :, :].long())
+                else:
                     prediction = self.model(data)
                     prediction_softmax = F.softmax(prediction, dim=1)
-                    loss = self.loss_function(prediction, target[:, 0, :, :])
+                    loss = self.loss_function(prediction, target[:, 0, :, :].long())
 
                 print(f"Batch {i}. Data shape {data.shape} Loss {loss}")
 
