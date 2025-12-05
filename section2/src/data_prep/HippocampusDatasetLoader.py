@@ -54,6 +54,20 @@ def process_single_file(args):
         # The CrossEntropyLoss function expects integer class labels, not floating point values.
         # Converting to int ensures compatibility with PyTorch's loss function and prevents numerical errors.
 
+        if image.shape != label.shape:
+            mismatch_percent = abs(image.shape[0] - label.shape[0]) / max(image.shape[0], label.shape[0]) * 100
+            print(f"WARNING: Shape mismatch for {f}: image={image.shape}, label={label.shape}")
+            
+            if mismatch_percent > 50:
+                print(f"  SEVERE MISMATCH ({mismatch_percent:.1f}% difference) - SKIPPING file {f}")
+                return None
+            
+            # For minor mismatches, crop to minimum size
+            min_slices = min(image.shape[0], label.shape[0])
+            image = image[:min_slices, :, :]
+            label = label[:min_slices, :, :]
+            print(f"  Cropped both to {image.shape}")
+
         return {"image": image, "seg": label, "filename": f}
     except Exception as e:
         print(f"Error processing {f}: {e}")
@@ -87,6 +101,7 @@ def LoadHippocampusData(root_dir, y_shape, z_shape):
     process_args = [(f, image_dir, label_dir, y_shape, z_shape) for f in images]
     
     out = []
+    skipped = []
     
     max_workers = min(cpu_count(), len(images))
     
@@ -98,6 +113,8 @@ def LoadHippocampusData(root_dir, y_shape, z_shape):
             result = future.result()
             if result is not None:
                 out.append(result)
+            else:
+                skipped.append("unknown")
             
             completed += 1
             if completed % 50 == 0:
@@ -107,4 +124,6 @@ def LoadHippocampusData(root_dir, y_shape, z_shape):
 
     # Hippocampus dataset only takes about 300 Mb RAM, so we can afford to keep it all in RAM
     print(f"Processed {len(out)} files, total {sum([x['image'].shape[0] for x in out])} slices")
+    if len(skipped) > 0:
+        print(f"WARNING: Skipped {len(skipped)} files due to severe shape mismatches")
     return np.array(out)
