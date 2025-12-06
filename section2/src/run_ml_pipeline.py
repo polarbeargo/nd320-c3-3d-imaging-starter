@@ -3,9 +3,27 @@ This file contains code that will kick off training and testing processes
 """
 import os
 import json
+import numpy as np
 
 from experiments.UNetExperiment import UNetExperiment
 from data_prep.HippocampusDatasetLoader import LoadHippocampusData
+
+def convert_to_json_serializable(obj):
+    """
+    Convert NumPy types to Python native types for JSON serialization
+    """
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: convert_to_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_json_serializable(item) for item in obj]
+    else:
+        return obj
 
 class Config:
     """
@@ -13,12 +31,12 @@ class Config:
     """
     def __init__(self):
         self.name = "Basic_unet"
-        self.root_dir = r"/out"
+        self.root_dir = r"../out"
         self.n_epochs = 10
         self.learning_rate = 0.0002
         self.batch_size = 8
         self.patch_size = 64
-        self.test_results_dir = "/test_result_out"
+        self.test_results_dir = "../out"
         self.use_amp = True
 
 if __name__ == "__main__":
@@ -79,6 +97,7 @@ if __name__ == "__main__":
     results_json = exp.run_test()
 
     results_json["config"] = vars(c)
+    results_json = convert_to_json_serializable(results_json)
 
     with open(os.path.join(exp.out_dir, "results.json"), 'w') as out_file:
         json.dump(results_json, out_file, indent=2, separators=(',', ': '))
