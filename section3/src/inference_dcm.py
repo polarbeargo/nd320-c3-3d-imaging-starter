@@ -16,6 +16,8 @@ import datetime
 import time
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import cpu_count
 
 import numpy as np
 import pydicom
@@ -61,9 +63,49 @@ def get_predicted_volumes(pred):
     """
 
     # TASK: Compute the volume of your hippocampal prediction
-    # <YOUR CODE HERE>
+    # Count voxels for each class
+    # Class 0: background
+    # Class 1: anterior hippocampus
+    # Class 2: posterior hippocampus
+    
+    volume_ant = np.sum(pred == 1)
+    volume_post = np.sum(pred == 2)
+    total_volume = volume_ant + volume_post
 
     return {"anterior": volume_ant, "posterior": volume_post, "total": total_volume}
+
+def process_single_slice_for_report(args):
+    """Process a single slice for the report (normalization, coloring, compositing)
+    
+    Arguments:
+        args: tuple of (orig_vol, pred_vol, slice_num, slice_index)
+        
+    Returns:
+        tuple of (composite_image, slice_num, slice_index)
+    """
+    orig_vol, pred_vol, slice_num, slice_index = args
+    
+    try:
+        orig_slice = orig_vol[:, :, slice_num]
+        pred_slice = pred_vol[:, :, slice_num]
+        
+        orig_normalized = np.flip((orig_slice / np.max(orig_slice)) * 255).T.astype(np.uint8)
+        pil_orig = Image.fromarray(orig_normalized, mode="L").convert("RGBA").resize((200, 200))
+        
+        # Create overlay by coloring the prediction mask
+        # Anterior (class 1) = red, Posterior (class 2) = blue
+        pred_colored = np.zeros((*pred_slice.shape, 4), dtype=np.uint8)
+        pred_colored[pred_slice == 1] = [255, 0, 0, 100]
+        pred_colored[pred_slice == 2] = [0, 0, 255, 100]
+        pred_colored = np.flip(pred_colored, axis=0).transpose(1, 0, 2)
+        
+        pil_pred = Image.fromarray(pred_colored, mode="RGBA").resize((200, 200))
+        composite = Image.alpha_composite(pil_orig, pil_pred)
+        
+        return (composite, slice_num, slice_index)
+    except Exception as e:
+        print(f"Error processing slice {slice_num}: {e}")
+        return None
 
 def create_report(inference, header, orig_vol, pred_vol):
     """Generates an image with inference report
@@ -97,26 +139,55 @@ def create_report(inference, header, orig_vol, pred_vol):
     # genius to make if shine. After all, the is the only part of all our machine learning 
     # efforts that will be visible to the world. The usefulness of your computations will largely
     # depend on how you present them.
-
-    # SAMPLE CODE BELOW: UNCOMMENT AND CUSTOMIZE
-    # draw.text((10, 0), "HippoVolume.AI", (255, 255, 255), font=header_font)
-    # draw.multiline_text((10, 90),
-    #                     f"Patient ID: {header.PatientID}\n"
-    #                       <WHAT OTHER INFORMATION WOULD BE RELEVANT?>
-    #                     (255, 255, 255), font=main_font)
-
-    # STAND-OUT SUGGESTION:
-    # In addition to text data in the snippet above, can you show some images?
-    # Think, what would be relevant to show? Can you show an overlay of mask on top of original data?
-    # Hint: here's one way to convert a numpy array into a PIL image and draw it inside our pimg object:
-    #
-    # Create a PIL image from array:
-    # Numpy array needs to flipped, transposed and normalized to a matrix of values in the range of [0..255]
-    # nd_img = np.flip((slice/np.max(slice))*0xff).T.astype(np.uint8)
-    # This is how you create a PIL image from numpy array
-    # pil_i = Image.fromarray(nd_img, mode="L").convert("RGBA").resize(<dimensions>)
-    # Paste the PIL image into our main report image object (pimg)
-    # pimg.paste(pil_i, box=(10, 280))
+    draw.text((10, 0), "HippoVolume.AI", (255, 255, 255), font=header_font)
+    draw.text((10, 50), "Automated Hippocampus Volume Report", (200, 200, 200), font=main_font)
+    
+    draw.multiline_text((10, 90),
+                        f"Patient ID: {header.PatientID}\n"
+                        f"Patient Name: {header.PatientName}\n"
+                        f"Study Date: {header.StudyDate}\n"
+                        f"Modality: {header.Modality}\n"
+                        f"Series Description: {header.SeriesDescription}",
+                        (255, 255, 255), font=main_font)
+    
+    draw.multiline_text((10, 220),
+                        f"VOLUME MEASUREMENTS:\n"
+                        f"Anterior Hippocampus: {inference['anterior']} voxels\n"
+                        f"Posterior Hippocampus: {inference['posterior']} voxels\n"
+                        f"Total Hippocampus: {inference['total']} voxels",
+                        (100, 255, 100), font=main_font)
+    
+    slice_nums = [orig_vol.shape[2]//3, orig_vol.shape[2]//2, orig_vol.shape[2]*3//4]
+    slice_args = [(orig_vol, pred_vol, slice_num, i) for i, slice_num in enumerate(slice_nums)]
+    
+    composite_images = {}
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = [executor.submit(process_single_slice_for_report, args) for args in slice_args]
+        
+        for future in as_completed(futures):
+            result = future.result()
+            if result is not None:
+                composite, slice_num, slice_index = result
+                composite_images[slice_index] = (composite, slice_num)
+    
+    for i in sorted(composite_images.keys()):
+        composite, slice_num = composite_images[i]
+        x_pos = 10 + (i * 210)
+        y_pos = 360
+        pimg.paste(composite, box=(x_pos, y_pos))
+        draw.text((x_pos, y_pos + 210), f"Slice {slice_num}", (255, 255, 255), font=main_font)
+    
+    draw.text((10, 600), "LEGEND:", (255, 255, 255), font=main_font)
+    draw.rectangle([10, 630, 30, 650], fill=(255, 0, 0))
+    draw.text((40, 630), "Anterior Hippocampus", (255, 255, 255), font=main_font)
+    draw.rectangle([10, 660, 30, 680], fill=(0, 0, 255))
+    draw.text((40, 660), "Posterior Hippocampus", (255, 255, 255), font=main_font)
+    
+    draw.multiline_text((10, 720),
+                        "DISCLAIMER: This report is generated by an AI algorithm\n"
+                        "for research purposes. Clinical decisions should be made\n"
+                        "by qualified healthcare professionals.",
+                        (200, 200, 200), font=main_font)
 
     return pimg
 
@@ -202,9 +273,24 @@ def save_report_as_dcm(header, report, path):
 
     pydicom.filewriter.dcmwrite(path, out, write_like_original=False)
 
+def load_single_dicom_file(filepath):
+    """Helper function to load a single DICOM file
+    
+    Arguments:
+        filepath {string} -- full path to DICOM file
+        
+    Returns:
+        PyDicom object or None if error
+    """
+    try:
+        return pydicom.dcmread(filepath)
+    except Exception as e:
+        print(f"Error reading {filepath}: {e}")
+        return None
+
 def get_series_for_inference(path):
     """Reads multiple series from one folder and picks the one
-    to run inference on.
+    to run inference on. Uses parallel processing for faster DICOM loading.
 
     Arguments:
         path {string} -- location of the DICOM files
@@ -216,7 +302,22 @@ def get_series_for_inference(path):
     # Here we are assuming that path is a directory that contains a full study as a collection
     # of files
     # We are reading all files into a list of PyDicom objects so that we can filter them later
-    dicoms = [pydicom.dcmread(os.path.join(path, f)) for f in os.listdir(path)]
+    file_list = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
+    file_paths = [os.path.join(path, f) for f in file_list]
+    
+    print(f"Loading {len(file_paths)} DICOM files in parallel...")
+    max_workers = min(cpu_count() * 2, len(file_paths))
+    
+    dicoms = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_path = {executor.submit(load_single_dicom_file, fp): fp for fp in file_paths}
+        
+        for future in as_completed(future_to_path):
+            result = future.result()
+            if result is not None:
+                dicoms.append(result)
+    
+    print(f"Successfully loaded {len(dicoms)} DICOM files")
 
     # TASK: create a series_for_inference variable that will contain a list of only 
     # those PyDicom objects that represent files that belong to the series that you 
@@ -228,8 +329,7 @@ def get_series_for_inference(path):
     # people who configured the HippoCrop tool and they label the output of their tool in a 
     # certain way. Can you figure out which is that? 
     # Hint: inspect the metadata of HippoCrop series
-
-    # <YOUR CODE HERE>
+    series_for_inference = [dcm for dcm in dicoms if "HippoCrop" in dcm.SeriesDescription]
 
     # Check if there are more than one series (using set comprehension).
     if len({f.SeriesInstanceUID for f in series_for_inference}) != 1:
@@ -271,7 +371,7 @@ if __name__ == "__main__":
     # TASK: Use the UNetInferenceAgent class and model parameter file from the previous section
     inference_agent = UNetInferenceAgent(
         device="cpu",
-        parameter_file_path=r"<PATH TO PARAMETER FILE>")
+        parameter_file_path=r"../../section2/out/model.pth")
 
     # Run inference
     # TASK: single_volume_inference_unpadded takes a volume of arbitrary size 
@@ -283,7 +383,7 @@ if __name__ == "__main__":
 
     # Create and save the report
     print("Creating and pushing report...")
-    report_save_path = r"<TEMPORARY PATH TO SAVE YOUR REPORT FILE>"
+    report_save_path = r"/tmp/report.dcm"
     # TASK: create_report is not complete. Go and complete it. 
     # STAND OUT SUGGESTION: save_report_as_dcm has some suggestions if you want to expand your
     # knowledge of DICOM format
@@ -293,7 +393,7 @@ if __name__ == "__main__":
     # Send report to our storage archive
     # TASK: Write a command line string that will issue a DICOM C-STORE request to send our report
     # to our Orthanc server (that runs on port 4242 of the local machine), using storescu tool
-    os_command("<COMMAND LINE TO SEND REPORT TO ORTHANC>")
+    os_command("storescu 127.0.0.1 4242 -v -aec HIPPOAI " + report_save_path)
 
     # This line will remove the study dir if run as root user
     # Sleep to let our StoreSCP server process the report (remember - in our setup
