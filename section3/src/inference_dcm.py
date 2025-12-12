@@ -331,9 +331,13 @@ def get_series_for_inference(path):
     # Hint: inspect the metadata of HippoCrop series
     series_for_inference = [dcm for dcm in dicoms if "HippoCrop" in dcm.SeriesDescription]
 
+    if len(series_for_inference) == 0:
+        print(f"No series with 'HippoCrop' in SeriesDescription. Using all {len(dicoms)} files from directory.")
+        series_for_inference = dicoms
+
     # Check if there are more than one series (using set comprehension).
-    if len({f.SeriesInstanceUID for f in series_for_inference}) != 1:
-        print("Error: can not figure out what series to run inference on")
+    if len(series_for_inference) > 0 and len({f.SeriesInstanceUID for f in series_for_inference}) != 1:
+        print("Error: Multiple different series found in directory")
         return []
 
     return series_for_inference
@@ -358,8 +362,15 @@ if __name__ == "__main__":
     subdirs = [os.path.join(sys.argv[1], d) for d in os.listdir(sys.argv[1]) if
                 os.path.isdir(os.path.join(sys.argv[1], d))]
 
+    hcrop_dirs = [d for d in subdirs if 'HCropVolume' in os.path.basename(d) or 'HippoCrop' in os.path.basename(d)]
+    
+    if not hcrop_dirs:
+        print(f"Error: Could not find HippoCrop volume directory in {sys.argv[1]}")
+        print(f"Available directories: {[os.path.basename(d) for d in subdirs]}")
+        sys.exit(1)
+    
     # Get the latest directory
-    study_dir = sorted(subdirs, key=lambda dir: os.stat(dir).st_mtime, reverse=True)[0]
+    study_dir = sorted(hcrop_dirs, key=lambda dir: os.stat(dir).st_mtime, reverse=True)[0]
 
     print(f"Looking for series to run inference on in directory {study_dir}...")
 
@@ -371,7 +382,7 @@ if __name__ == "__main__":
     # TASK: Use the UNetInferenceAgent class and model parameter file from the previous section
     inference_agent = UNetInferenceAgent(
         device="cpu",
-        parameter_file_path=r"../../section2/out/model.pth")
+        parameter_file_path=r"../out/2025-12-03_0609_Basic_unet/model.pth")
 
     # Run inference
     # TASK: single_volume_inference_unpadded takes a volume of arbitrary size 
@@ -383,7 +394,7 @@ if __name__ == "__main__":
 
     # Create and save the report
     print("Creating and pushing report...")
-    report_save_path = r"/tmp/report.dcm"
+    report_save_path = r"/home/workspace/out/report.dcm"
     # TASK: create_report is not complete. Go and complete it. 
     # STAND OUT SUGGESTION: save_report_as_dcm has some suggestions if you want to expand your
     # knowledge of DICOM format
