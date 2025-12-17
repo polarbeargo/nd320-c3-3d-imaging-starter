@@ -25,9 +25,9 @@ def Dice3d(a, b):
     # TASK: Write implementation of Dice3D. If you completed exercises in the lessons
     # you should already have it.
     # Dice = 2 * |A ∩ B| / (|A| + |B|)
-    a_binary = (a > 0).astype(np.float32)
-    b_binary = (b > 0).astype(np.float32)
-    intersection = np.sum(a_binary * b_binary)
+    a_binary = (a > 0)
+    b_binary = (b > 0)
+    intersection = np.sum(np.logical_and(a_binary, b_binary))
     volume_sum = np.sum(a_binary) + np.sum(b_binary)
     
     if volume_sum == 0:
@@ -58,10 +58,10 @@ def Jaccard3d(a, b):
     # TASK: Write implementation of Jaccard similarity coefficient. Please do not use 
     # the Dice3D function from above to do the computation ;)
     # Jaccard = |A ∩ B| / |A ∪ B|
-    a_binary = (a > 0).astype(np.float32)
-    b_binary = (b > 0).astype(np.float32)
-    intersection = np.sum(a_binary * b_binary)
-    union = np.sum(a_binary) + np.sum(b_binary) - intersection
+    a_binary = (a > 0)
+    b_binary = (b > 0)
+    intersection = np.sum(np.logical_and(a_binary, b_binary))
+    union = np.sum(np.logical_or(a_binary, b_binary))
     
     if union == 0:
         return 1.0 if np.sum(a_binary) == 0 and np.sum(b_binary) == 0 else 0.0
