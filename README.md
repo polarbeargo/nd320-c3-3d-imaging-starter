@@ -175,7 +175,7 @@ Specifically, we have the following software in this setup:
 ```mermaid
 flowchart TD
     Start([MRI Scans]) --> EDA[Section 1: EDA<br/>Exploratory Analysis]
-    EDA --> Clean[(Clean Dataset<br/>262 volumes)]
+    EDA --> Clean[(Clean Dataset<br/>260 volumes)]
     
     Clean --> Train[Section 2: Training]
     Train --> Load[HippocampusDatasetLoader<br/>ProcessPoolExecutor]
@@ -333,6 +333,8 @@ graph LR
 ```
 
 ## 2. Class Diagram - Section 2 (Training)
+
+The `Config` class holds hyperparameters that configure the `UNetExperiment`, which orchestrates the entire training workflow. The experiment uses `HippocampusDatasetLoader` with `ProcessPoolExecutor` for parallel NIFTI loading, feeds data through `SlicesDataset` to PyTorch's `DataLoader`, and trains the recursive `UNet` model composed of `UnetSkipConnectionBlock` layers. The `UNetInferenceAgent` performs test-time inference, while `VolumeStats` computes Dice and Jaccard metrics for model evaluation.
 
 ```mermaid
 classDiagram
@@ -506,6 +508,8 @@ classDiagram
     inference_dcm --> Orthanc : sends to
     UNetInferenceAgent_Section3 --> UNet_Section3 : uses
 ```
+
+This diagram shows the deployment architecture integrating with clinical PACS systems. The `inference_dcm` script orchestrates the entire workflow: using `ThreadPoolExecutor` for parallel DICOM I/O, `PyDicom` for reading medical images, `UNetInferenceAgent` with the trained `UNet` model for hippocampus segmentation, `PIL_Image` for generating visual reports, and finally sending results to `Orthanc` PACS via DICOM C-STORE protocol for clinical review.
 
 ---
 
@@ -757,6 +761,8 @@ classDiagram
     note for BatchProcessingStats "Tracks success/failure,\ntiming, and results"
     note for ProcessPoolExecutor "Study-level parallelism\n(bypasses Python GIL)"
 ```
+
+This diagram illustrates the high-throughput batch processing architecture for processing multiple studies concurrently. `batch_inference_dcm` orchestrates study-level parallelism using `ProcessPoolExecutor` (bypassing Python's GIL), while reusing `inference_dcm`functions for per-study DICOM loading and report generation. `BatchProcessingStats` tracks success/failure rates, timing, and `subprocess` handles DICOM C-STORE operations to `Orthanc_PACS` with timeout protection for robust clinical deployment.
 
 ---
 
